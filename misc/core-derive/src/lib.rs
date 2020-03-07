@@ -56,19 +56,9 @@ fn build_struct(ast: &DeriveInput, data_struct: &DataStruct) -> TokenStream {
     let protocols_handler = quote!{::libp2p::swarm::ProtocolsHandler};
     let into_proto_select_ident = quote!{::libp2p::swarm::IntoProtocolsHandlerSelect};
     let peer_id = quote!{::libp2p::core::PeerId};
+    let connection_id = quote!{::libp2p::core::connection::ConnectionId};
     let connected_point = quote!{::libp2p::core::ConnectedPoint};
-    let listener_id = quote!{::libp2p::core::nodes::ListenerId};
-
-    // Name of the type parameter that represents the substream.
-    let substream_generic = {
-        let mut n = "TSubstream".to_string();
-        // Avoid collisions.
-        while ast.generics.type_params().any(|tp| tp.ident == n) {
-            n.push('1');
-        }
-        let n = Ident::new(&n, name.span());
-        quote!{#n}
-    };
+    let listener_id = quote!{::libp2p::core::connection::ListenerId};
 
     let poll_parameters = quote!{::libp2p::swarm::PollParameters};
 
@@ -77,29 +67,21 @@ fn build_struct(ast: &DeriveInput, data_struct: &DataStruct) -> TokenStream {
         let tp = ast.generics.type_params();
         let lf = ast.generics.lifetimes();
         let cst = ast.generics.const_params();
-        quote!{<#(#lf,)* #(#tp,)* #(#cst,)* #substream_generic>}
+        quote!{<#(#lf,)* #(#tp,)* #(#cst,)*>}
     };
 
     // Build the `where ...` clause of the trait implementation.
     let where_clause = {
-        let mut additional = data_struct.fields.iter()
+        let additional = data_struct.fields.iter()
             .filter(|x| !is_ignored(x))
             .flat_map(|field| {
                 let ty = &field.ty;
                 vec![
                     quote!{#ty: #trait_to_impl},
                     quote!{Self: #net_behv_event_proc<<#ty as #trait_to_impl>::OutEvent>},
-                    quote!{<<#ty as #trait_to_impl>::ProtocolsHandler as #into_protocols_handler>::Handler: #protocols_handler<Substream = #substream_generic>},
-                    // Note: this bound is required because of https://github.com/rust-lang/rust/issues/55697
-                    quote!{<<<#ty as #trait_to_impl>::ProtocolsHandler as #into_protocols_handler>::Handler as #protocols_handler>::InboundProtocol: ::libp2p::core::InboundUpgrade<::libp2p::core::Negotiated<#substream_generic>>},
-                    quote!{<<<#ty as #trait_to_impl>::ProtocolsHandler as #into_protocols_handler>::Handler as #protocols_handler>::OutboundProtocol: ::libp2p::core::OutboundUpgrade<::libp2p::core::Negotiated<#substream_generic>>},
                 ]
             })
             .collect::<Vec<_>>();
-
-        additional.push(quote!{#substream_generic: ::libp2p::futures::io::AsyncRead});
-        additional.push(quote!{#substream_generic: ::libp2p::futures::io::AsyncWrite});
-        additional.push(quote!{#substream_generic: Unpin});
 
         if let Some(where_clause) = where_clause {
             if where_clause.predicates.trailing_punct() {
@@ -186,32 +168,6 @@ fn build_struct(ast: &DeriveInput, data_struct: &DataStruct) -> TokenStream {
                 match field.ident {
                     Some(ref i) => quote!{ self.#i.inject_disconnected(peer_id, endpoint.clone()); },
                     None => quote!{ self.#field_n.inject_disconnected(peer_id, endpoint.clone()); },
-                }
-            })
-        })
-    };
-
-    // Build the list of statements to put in the body of `inject_replaced()`.
-    let inject_replaced_stmts = {
-        let num_fields = data_struct.fields.iter().filter(|f| !is_ignored(f)).count();
-        data_struct.fields.iter().enumerate().filter_map(move |(field_n, field)| {
-            if is_ignored(&field) {
-                return None;
-            }
-
-            Some(if field_n == num_fields - 1 {
-                match field.ident {
-                    Some(ref i) => quote!{ self.#i.inject_replaced(peer_id, closed_endpoint, new_endpoint); },
-                    None => quote!{ self.#field_n.inject_replaced(peer_id, closed_endpoint, new_endpoint); },
-                }
-            } else {
-                match field.ident {
-                    Some(ref i) => quote!{
-                        self.#i.inject_replaced(peer_id.clone(), closed_endpoint.clone(), new_endpoint.clone());
-                    },
-                    None => quote!{
-                        self.#field_n.inject_replaced(peer_id.clone(), closed_endpoint.clone(), new_endpoint.clone());
-                    },
                 }
             })
         })
@@ -313,10 +269,10 @@ fn build_struct(ast: &DeriveInput, data_struct: &DataStruct) -> TokenStream {
         })
     };
 
-    // Build the list of variants to put in the body of `inject_node_event()`.
+    // Build the list of variants to put in the body of `inject_event()`.
     //
     // The event type is a construction of nested `#either_ident`s of the events of the children.
-    // We call `inject_node_event` on the corresponding child.
+    // We call `inject_event` on the corresponding child.
     let inject_node_event_stmts = data_struct.fields.iter().enumerate().filter(|f| !is_ignored(&f.1)).enumerate().map(|(enum_n, (field_n, field))| {
         let mut elem = if enum_n != 0 {
             quote!{ #either_ident::Second(ev) }
@@ -329,8 +285,8 @@ fn build_struct(ast: &DeriveInput, data_struct: &DataStruct) -> TokenStream {
         }
 
         Some(match field.ident {
-            Some(ref i) => quote!{ #elem => self.#i.inject_node_event(peer_id, ev) },
-            None => quote!{ #elem => self.#field_n.inject_node_event(peer_id, ev) },
+            Some(ref i) => quote!{ #elem => self.#i.inject_event(peer_id, connection_id, ev) },
+            None => quote!{ #elem => self.#field_n.inject_event(peer_id, connection_id, ev) },
         })
     });
 
@@ -371,7 +327,7 @@ fn build_struct(ast: &DeriveInput, data_struct: &DataStruct) -> TokenStream {
             };
 
             match out_handler {
-                Some(h) => out_handler = Some(quote!{ #h.select(#builder) }),
+                Some(h) => out_handler = Some(quote!{ #into_protocols_handler::select(#h, #builder) }),
                 ref mut h @ None => *h = Some(builder),
             }
         }
@@ -390,7 +346,7 @@ fn build_struct(ast: &DeriveInput, data_struct: &DataStruct) -> TokenStream {
                     syn::NestedMeta::Meta(syn::Meta::NameValue(ref m)) if m.path.is_ident("poll_method") => {
                         if let syn::Lit::Str(ref s) = m.lit {
                             let ident: Ident = syn::parse_str(&s.value()).unwrap();
-                            poll_method = quote!{#name::#ident(self, cx)};
+                            poll_method = quote!{#name::#ident(self, cx, poll_params)};
                         }
                     }
                     _ => ()
@@ -430,9 +386,10 @@ fn build_struct(ast: &DeriveInput, data_struct: &DataStruct) -> TokenStream {
                     std::task::Poll::Ready(#network_behaviour_action::DialPeer { peer_id }) => {
                         return std::task::Poll::Ready(#network_behaviour_action::DialPeer { peer_id });
                     }
-                    std::task::Poll::Ready(#network_behaviour_action::SendEvent { peer_id, event }) => {
-                        return std::task::Poll::Ready(#network_behaviour_action::SendEvent {
+                    std::task::Poll::Ready(#network_behaviour_action::NotifyHandler { peer_id, handler, event }) => {
+                        return std::task::Poll::Ready(#network_behaviour_action::NotifyHandler {
                             peer_id,
+                            handler,
                             event: #wrapped_event,
                         });
                     }
@@ -472,10 +429,6 @@ fn build_struct(ast: &DeriveInput, data_struct: &DataStruct) -> TokenStream {
                 #(#inject_disconnected_stmts);*
             }
 
-            fn inject_replaced(&mut self, peer_id: #peer_id, closed_endpoint: #connected_point, new_endpoint: #connected_point) {
-                #(#inject_replaced_stmts);*
-            }
-
             fn inject_addr_reach_failure(&mut self, peer_id: Option<&#peer_id>, addr: &#multiaddr, error: &dyn std::error::Error) {
                 #(#inject_addr_reach_failure_stmts);*
             }
@@ -504,9 +457,10 @@ fn build_struct(ast: &DeriveInput, data_struct: &DataStruct) -> TokenStream {
                 #(#inject_listener_closed_stmts);*
             }
 
-            fn inject_node_event(
+            fn inject_event(
                 &mut self,
                 peer_id: #peer_id,
+                connection_id: #connection_id,
                 event: <<Self::ProtocolsHandler as #into_protocols_handler>::Handler as #protocols_handler>::OutEvent
             ) {
                 match event {

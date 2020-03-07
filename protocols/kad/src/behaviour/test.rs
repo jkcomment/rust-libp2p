@@ -34,8 +34,7 @@ use libp2p_core::{
     PeerId,
     Transport,
     identity,
-    transport::{MemoryTransport, boxed::Boxed},
-    nodes::Substream,
+    transport::MemoryTransport,
     multiaddr::{Protocol, multiaddr},
     muxing::StreamMuxerBox,
     upgrade
@@ -46,12 +45,9 @@ use libp2p_yamux as yamux;
 use quickcheck::*;
 use rand::{Rng, random, thread_rng};
 use std::{collections::{HashSet, HashMap}, io, num::NonZeroUsize, u64};
-use multihash::{Multihash, Hash::SHA2256};
+use multihash::{wrap, Code, Multihash};
 
-type TestSwarm = Swarm<
-    Boxed<(PeerId, StreamMuxerBox), io::Error>,
-    Kademlia<Substream<StreamMuxerBox>, MemoryStore>
->;
+type TestSwarm = Swarm<Kademlia<MemoryStore>>;
 
 /// Builds swarms, each listening on a port. Does *not* connect the nodes together.
 fn build_nodes(num: usize) -> (u64, Vec<TestSwarm>) {
@@ -71,7 +67,7 @@ fn build_nodes_with_config(num: usize, cfg: KademliaConfig) -> (u64, Vec<TestSwa
             .authenticate(SecioConfig::new(local_key))
             .multiplex(yamux::Config::default())
             .map(|(p, m), _| (p, StreamMuxerBox::new(m)))
-            .map_err(|e| panic!("Failed to create transport: {:?}", e))
+            .map_err(|e| -> io::Error { panic!("Failed to create transport: {:?}", e); })
             .boxed();
 
         let local_id = local_public_key.clone().into_peer_id();
@@ -108,6 +104,10 @@ fn build_connected_nodes_with_config(total: usize, step: usize, cfg: KademliaCon
     }
 
     (swarm_ids, swarms)
+}
+
+fn random_multihash() -> Multihash {
+    wrap(Code::Sha2_256, &thread_rng().gen::<[u8; 32]>())
 }
 
 #[test]
@@ -306,7 +306,7 @@ fn get_record_not_found() {
     swarms[0].add_address(&swarm_ids[1], Protocol::Memory(port_base + 1).into());
     swarms[1].add_address(&swarm_ids[2], Protocol::Memory(port_base + 2).into());
 
-    let target_key = record::Key::from(Multihash::random(SHA2256));
+    let target_key = record::Key::from(random_multihash());
     swarms[0].get_record(&target_key, Quorum::One);
 
     block_on(
@@ -413,8 +413,8 @@ fn put_record() {
                     let key = kbucket::Key::new(r.key.clone());
                     let mut expected = swarm_ids.clone().split_off(1);
                     expected.sort_by(|id1, id2|
-                        kbucket::Key::new(id1).distance(&key).cmp(
-                            &kbucket::Key::new(id2).distance(&key)));
+                        kbucket::Key::new(id1.clone()).distance(&key).cmp(
+                            &kbucket::Key::new(id2.clone()).distance(&key)));
 
                     let expected = expected
                         .into_iter()
@@ -464,7 +464,7 @@ fn get_value() {
     swarms[0].add_address(&swarm_ids[1], Protocol::Memory(port_base + 1).into());
     swarms[1].add_address(&swarm_ids[2], Protocol::Memory(port_base + 2).into());
 
-    let record = Record::new(Multihash::random(SHA2256), vec![4,5,6]);
+    let record = Record::new(random_multihash(), vec![4,5,6]);
 
     swarms[1].store.put(record.clone()).unwrap();
     swarms[0].get_record(&record.key, Quorum::One);
@@ -499,7 +499,7 @@ fn get_value_many() {
     let (_, mut swarms) = build_connected_nodes(num_nodes, num_nodes);
     let num_results = 10;
 
-    let record = Record::new(Multihash::random(SHA2256), vec![4,5,6]);
+    let record = Record::new(random_multihash(), vec![4,5,6]);
 
     for i in 0 .. num_nodes {
         swarms[i].store.put(record.clone()).unwrap();
@@ -612,8 +612,8 @@ fn add_provider() {
                     let mut expected = swarm_ids.clone().split_off(1);
                     let kbucket_key = kbucket::Key::new(key);
                     expected.sort_by(|id1, id2|
-                        kbucket::Key::new(id1).distance(&kbucket_key).cmp(
-                            &kbucket::Key::new(id2).distance(&kbucket_key)));
+                        kbucket::Key::new(id1.clone()).distance(&kbucket_key).cmp(
+                            &kbucket::Key::new(id2.clone()).distance(&kbucket_key)));
 
                     let expected = expected
                         .into_iter()

@@ -26,9 +26,11 @@ use libp2p_core::{
     Multiaddr,
     PeerId,
     PublicKey,
-    upgrade::{Negotiated, ReadOneError, UpgradeError}
+    connection::ConnectionId,
+    upgrade::{ReadOneError, UpgradeError}
 };
 use libp2p_swarm::{
+    NegotiatedSubstream,
     NetworkBehaviour,
     NetworkBehaviourAction,
     PollParameters,
@@ -39,7 +41,7 @@ use std::{collections::HashMap, collections::VecDeque, io, pin::Pin, task::Conte
 
 /// Network behaviour that automatically identifies nodes periodically, returns information
 /// about them, and answers identify queries from other nodes.
-pub struct Identify<TSubstream> {
+pub struct Identify {
     /// Protocol version to send back to remotes.
     protocol_version: String,
     /// Agent version to send back to remotes.
@@ -49,17 +51,17 @@ pub struct Identify<TSubstream> {
     /// For each peer we're connected to, the observed address to send back to it.
     observed_addresses: HashMap<PeerId, Multiaddr>,
     /// Pending replies to send.
-    pending_replies: VecDeque<Reply<TSubstream>>,
+    pending_replies: VecDeque<Reply>,
     /// Pending events to be emitted when polled.
     events: VecDeque<NetworkBehaviourAction<(), IdentifyEvent>>,
 }
 
 /// A pending reply to an inbound identification request.
-enum Reply<TSubstream> {
+enum Reply {
     /// The reply is queued for sending.
     Queued {
         peer: PeerId,
-        io: ReplySubstream<Negotiated<TSubstream>>,
+        io: ReplySubstream<NegotiatedSubstream>,
         observed: Multiaddr
     },
     /// The reply is being sent.
@@ -69,7 +71,7 @@ enum Reply<TSubstream> {
     }
 }
 
-impl<TSubstream> Identify<TSubstream> {
+impl Identify {
     /// Creates a new `Identify` network behaviour.
     pub fn new(protocol_version: String, agent_version: String, local_public_key: PublicKey) -> Self {
         Identify {
@@ -83,11 +85,8 @@ impl<TSubstream> Identify<TSubstream> {
     }
 }
 
-impl<TSubstream> NetworkBehaviour for Identify<TSubstream>
-where
-    TSubstream: AsyncRead + AsyncWrite + Unpin + Send + 'static,
-{
-    type ProtocolsHandler = IdentifyHandler<TSubstream>;
+impl NetworkBehaviour for Identify {
+    type ProtocolsHandler = IdentifyHandler;
     type OutEvent = IdentifyEvent;
 
     fn new_handler(&mut self) -> Self::ProtocolsHandler {
@@ -111,9 +110,10 @@ where
         self.observed_addresses.remove(peer_id);
     }
 
-    fn inject_node_event(
+    fn inject_event(
         &mut self,
         peer_id: PeerId,
+        _connection: ConnectionId,
         event: <Self::ProtocolsHandler as ProtocolsHandler>::OutEvent,
     ) {
         match event {

@@ -25,10 +25,6 @@
 //! The upgrade's output is a `Sink + Stream` of messages. The `Stream` component is used
 //! to poll the underlying transport for incoming messages, and the `Sink` component
 //! is used to send messages to remote peers.
-//!
-//! [`KademliaProtocolConfig`]: protocol::KademliaProtocolConfig
-//! [`KadRequestMsg`]: protocol::KadRequestMsg
-//! [`KadResponseMsg`]: protocol::KadResponseMsg
 
 use bytes::BytesMut;
 use codec::UviBytes;
@@ -43,6 +39,9 @@ use std::{borrow::Cow, convert::TryFrom, time::Duration};
 use std::{io, iter};
 use unsigned_varint::codec;
 use wasm_timer::Instant;
+
+/// The protocol name used for negotiating with multistream-select.
+pub const DEFAULT_PROTO_NAME: &[u8] = b"/ipfs/kad/1.0.0";
 
 /// Status of our connection to a node reported by the Kademlia protocol.
 #[derive(Copy, Clone, PartialEq, Eq, Debug, Hash)]
@@ -156,7 +155,7 @@ impl KademliaProtocolConfig {
 impl Default for KademliaProtocolConfig {
     fn default() -> Self {
         KademliaProtocolConfig {
-            protocol_name: Cow::Borrowed(b"/ipfs/kad/1.0.0"),
+            protocol_name: Cow::Borrowed(DEFAULT_PROTO_NAME)
         }
     }
 }
