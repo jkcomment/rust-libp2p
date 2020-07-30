@@ -2,7 +2,7 @@
 name = "libp2p-core"
 edition = "2018"
 description = "Core traits and structs of libp2p"
-version = "0.19.2"
+version = "0.20.1"
 authors = ["Parity Technologies <admin@parity.io>"]
 license = "MIT"
 repository = "https://github.com/libp2p/rust-libp2p"
@@ -12,7 +12,7 @@ categories = ["network-programming", "asynchronous"]
 [dependencies]
 asn1_der = "0.6.1"
 bs58 = "0.3.0"
-ed25519-dalek = "1.0.0-pre.3"
+ed25519-dalek = "1.0.0-pre.4"
 either = "1.5"
 fnv = "1.0"
 futures = { version = "0.3.1", features = ["executor", "thread-pool"] }
@@ -35,11 +35,11 @@ unsigned-varint = "0.4"
 void = "1"
 zeroize = "1"
 
-[target.'cfg(not(any(target_os = "emscripten", target_os = "unknown")))'.dependencies]
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 ring = { version = "0.16.9", features = ["alloc", "std"], default-features = false }
 
 [dev-dependencies]
-async-std = "1.5.0"
+async-std = "1.6.2"
 libp2p-mplex = { path = "../muxers/mplex" }
 libp2p-secio = { path = "../protocols/secio" }
 libp2p-tcp = { path = "../transports/tcp", features = ["async-std"] }
